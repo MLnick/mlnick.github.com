@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
 
-  <title><![CDATA[My Octopress Blog]]></title>
+  <title><![CDATA[Crouching Data, Hidden Markov]]></title>
   <link href="http://MLnick.github.com/atom.xml" rel="self"/>
   <link href="http://MLnick.github.com/"/>
-  <updated>2013-01-21T21:37:52+02:00</updated>
+  <updated>2013-01-21T21:47:46+02:00</updated>
   <id>http://MLnick.github.com/</id>
   <author>
-    <name><![CDATA[Your Name]]></name>
+    <name><![CDATA[Nick Pentreath]]></name>
     
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
