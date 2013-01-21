@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: 
+
+Sitemap: http://MLnick.github.com/sitemap.xml 
