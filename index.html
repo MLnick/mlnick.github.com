@@ -9,7 +9,7 @@
   <meta name="author" content="Nick Pentreath">
 
   
-  <meta name="description" content="Blog Archives Recent Posts GitHub Repos Status updating&#8230; @MLnick on GitHub $.domReady(function(){ if (!window.jXHR){ var jxhr = document. &hellip;">
+  <meta name="description" content="This post is inspired by Edwin Chen’s post on Scalding. I encourage you to first read that post! The Spark code is adapted from his Scalding code and &hellip;">
   
 
   <!-- http://t.co/dKP3o1e -->
@@ -18,6 +18,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   
+  <link href="/stylesheets/data-table.css" media="screen, projection" rel="stylesheet" type="text/css" />
   <link rel="canonical" href="http://MLnick.github.com/">
   <link href="/favicon.png" rel="icon">
   <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
@@ -65,6 +66,856 @@
       <div class="blog-index">
   
   
+  
+    <article>
+      
+  <header>
+    
+      <h1 class="entry-title"><a href="/blog/2013/04/01/movie-recommendations-and-more-with-spark/">Movie Recommendations and More With Spark</a></h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+
+
+
+
+  
+
+
+<time datetime="2013-04-01T11:20:00+02:00" pubdate data-updated="true">Apr 1<span>st</span>, 2013</time>
+        
+      </p>
+    
+  </header>
+
+
+  <div class="entry-content"><p><em>This post is inspired by <a href="http://blog.echen.me/2012/02/09/movie-recommendations-and-more-via-mapreduce-and-scalding/">Edwin Chen’s post on Scalding</a>. I encourage you to first read that post! The Spark code is adapted from his Scalding code and is available in full <a href="https://gist.github.com/MLnick/5286475s">here</a>.</em></p>
+
+<p>As outlined in Ed’s post, Scalding is a Scala DSL for Hadoop MapReduce that makes it easier, more natural and more concise to write MapReduce workflows. The Scala code ultimately compiles down to MapReduce jobs via <a href="http://www.cascading.org/">Cascading</a>.</p>
+
+<h2 id="spark">Spark</h2>
+
+<p>The <a href="http://www.spark-project.org/">Spark Project</a> is a cluster computing framework that emphasizes low-latency job execution and in-memory caching to provide speed. It can run up to 100x faster than Hadoop MapReduce (when all the data is cached in memory) as a result. It is written in Scala, but also has Java and Python APIs. It is fully compatible with HDFS and any Hadoop <code>InputFormat/OutputFormat</code>, but is independent of Hadoop MapReduce. </p>
+
+<p>The Spark API bears many similarities to Scalding, providing a way to write natural Scala code instead of <code>Mappers</code> and <code>Reducers</code>. Taking Ed’s example:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Scalding</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="c1">// Create a histogram of tweet lengths.</span>
+</span><span class="line"><span class="n">tweets</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="-Symbol">&#39;tweet</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;length</span><span class="o">)</span> <span class="o">{</span> <span class="n">tweet</span> <span class="k">:</span> <span class="kt">String</span> <span class="o">=&gt;</span> <span class="n">tweet</span><span class="o">.</span><span class="n">size</span> <span class="o">}.</span><span class="n">groupBy</span><span class="o">(</span><span class="-Symbol">&#39;length</span><span class="o">)</span> <span class="o">{</span> <span class="k">_</span><span class="o">.</span><span class="n">size</span> <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Spark</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="c1">// Create a histogram of tweet lengths.</span>
+</span><span class="line"><span class="n">tweets</span><span class="o">.</span><span class="n">groupBy</span><span class="o">(</span><span class="n">tweet</span> <span class="k">:</span> <span class="kt">String</span> <span class="o">=&gt;</span> <span class="n">tweet</span><span class="o">.</span><span class="n">size</span><span class="o">).</span><span class="n">map</span><span class="o">(</span><span class="n">pair</span> <span class="k">=&gt;</span> <span class="o">(</span><span class="n">pair</span><span class="o">.</span><span class="n">_1</span><span class="o">,</span> <span class="n">pair</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">size</span><span class="o">))</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h2 id="movie-similarities">Movie Similarities</h2>
+
+<p>I’ve recently been experimenting a lot with Spark, and thought it would be interesting to compare Ed’s approach to computing movie similarities in Scalding with Spark. So I’ve ported his Scalding code over to Spark and we’ll compare the two as we go along. For a basic introduction to Spark’s API see the <a href="http://spark-project.org/docs/latest/quick-start.html">Spark Quickstart</a>.</p>
+
+<p>Firstly, we read the ratings from a file. Since I don’t have access to a nice Twitter tweet datasource, I used the <a href="http://www.grouplens.org/node/73">MovieLens 100k rating dataset</a>. The training set ratings are in a file called <code>ua.base</code>, while the movie item data is in <code>u.item</code>.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Scalding</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * The input is a TSV file with three columns: (user, movie, rating).</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">val</span> <span class="nc">INPUT_FILENAME</span> <span class="k">=</span> <span class="s">&quot;data/ratings.tsv&quot;</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * Read in the input and give each field a type and name.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">val</span> <span class="n">ratings</span> <span class="k">=</span> <span class="nc">Tsv</span><span class="o">(</span><span class="nc">INPUT_FILENAME</span><span class="o">,</span> <span class="o">(</span><span class="-Symbol">&#39;user</span><span class="o">,</span> <span class="-Symbol">&#39;movie</span><span class="o">,</span> <span class="-Symbol">&#39;rating</span><span class="o">))</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * Let&#39;s also keep track of the total number of people who rated each movie.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">val</span> <span class="n">numRaters</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">ratings</span>
+</span><span class="line">    <span class="c1">// Put the number of people who rated each movie into a field called &quot;numRaters&quot;.    </span>
+</span><span class="line">    <span class="o">.</span><span class="n">groupBy</span><span class="o">(</span><span class="-Symbol">&#39;movie</span><span class="o">)</span> <span class="o">{</span> <span class="k">_</span><span class="o">.</span><span class="n">size</span> <span class="o">}.</span><span class="n">rename</span><span class="o">(</span><span class="-Symbol">&#39;size</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;numRaters</span><span class="o">)</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// Merge `ratings` with `numRaters`, by joining on their movie fields.</span>
+</span><span class="line"><span class="k">val</span> <span class="n">ratingsWithSize</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">ratings</span><span class="o">.</span><span class="n">joinWithSmaller</span><span class="o">(</span><span class="-Symbol">&#39;movie</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;movie</span><span class="o">,</span> <span class="n">numRaters</span><span class="o">)</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// ratingsWithSize now contains the following fields: (user, movie, rating, numRaters).</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Spark</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="k">val</span> <span class="nc">TRAIN_FILENAME</span> <span class="k">=</span> <span class="s">&quot;ua.base&quot;</span>
+</span><span class="line"><span class="k">val</span> <span class="nc">MOVIES_FILENAME</span> <span class="k">=</span> <span class="s">&quot;u.item&quot;</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// Spark programs require a SparkContext to be initialized</span>
+</span><span class="line"><span class="k">val</span> <span class="n">sc</span> <span class="k">=</span> <span class="k">new</span> <span class="nc">SparkContext</span><span class="o">(</span><span class="n">master</span><span class="o">,</span> <span class="s">&quot;MovieSimilarities&quot;</span><span class="o">)</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// extract (userid, movieid, rating) from ratings data</span>
+</span><span class="line"><span class="k">val</span> <span class="n">ratings</span> <span class="k">=</span> <span class="n">sc</span><span class="o">.</span><span class="n">textFile</span><span class="o">(</span><span class="nc">TRAIN_FILENAME</span><span class="o">)</span>
+</span><span class="line">  <span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">line</span> <span class="k">=&gt;</span> <span class="o">{</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">fields</span> <span class="k">=</span> <span class="n">line</span><span class="o">.</span><span class="n">split</span><span class="o">(</span><span class="s">&quot;\t&quot;</span><span class="o">)</span>
+</span><span class="line">    <span class="o">(</span><span class="n">fields</span><span class="o">(</span><span class="mi">0</span><span class="o">).</span><span class="n">toInt</span><span class="o">,</span> <span class="n">fields</span><span class="o">(</span><span class="mi">1</span><span class="o">).</span><span class="n">toInt</span><span class="o">,</span> <span class="n">fields</span><span class="o">(</span><span class="mi">2</span><span class="o">).</span><span class="n">toInt</span><span class="o">)</span>
+</span><span class="line"><span class="o">})</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// get num raters per movie, keyed on movie id</span>
+</span><span class="line"><span class="k">val</span> <span class="n">numRatersPerMovie</span> <span class="k">=</span> <span class="n">ratings</span>
+</span><span class="line">  <span class="o">.</span><span class="n">groupBy</span><span class="o">(</span><span class="n">tup</span> <span class="k">=&gt;</span> <span class="n">tup</span><span class="o">.</span><span class="n">_2</span><span class="o">)</span>
+</span><span class="line">  <span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">grouped</span> <span class="k">=&gt;</span> <span class="o">(</span><span class="n">grouped</span><span class="o">.</span><span class="n">_1</span><span class="o">,</span> <span class="n">grouped</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">size</span><span class="o">))</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// join ratings with num raters on movie id</span>
+</span><span class="line"><span class="k">val</span> <span class="n">ratingsWithSize</span> <span class="k">=</span> <span class="n">ratings</span>
+</span><span class="line">  <span class="o">.</span><span class="n">groupBy</span><span class="o">(</span><span class="n">tup</span> <span class="k">=&gt;</span> <span class="n">tup</span><span class="o">.</span><span class="n">_2</span><span class="o">)</span>
+</span><span class="line">  <span class="o">.</span><span class="n">join</span><span class="o">(</span><span class="n">numRatersPerMovie</span><span class="o">)</span>
+</span><span class="line">  <span class="o">.</span><span class="n">flatMap</span><span class="o">(</span><span class="n">joined</span> <span class="k">=&gt;</span> <span class="o">{</span>
+</span><span class="line">    <span class="n">joined</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_1</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="o">(</span><span class="n">f</span><span class="o">.</span><span class="n">_1</span><span class="o">,</span> <span class="n">f</span><span class="o">.</span><span class="n">_2</span><span class="o">,</span> <span class="n">f</span><span class="o">.</span><span class="n">_3</span><span class="o">,</span> <span class="n">joined</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">))</span>
+</span><span class="line"><span class="o">})</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// ratingsWithSize now contains the following fields: (user, movie, rating, numRaters).</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Similarly to Scalding’s <code>Tsv</code> method, which reads a TSV file from HDFS, Spark’s <code>sc.textFile</code> method reads a text file from HDFS. However it’s up to us to specify how to split the fields.</p>
+
+<p>Also, Spark’s API for joins is a little lower-level than Scalding’s, hence we have to <code>groupBy</code> first and transform after the <code>join</code> with a <code>flatMap</code> operation to get the fields we want. Scalding actually does something similar under the hood of <code>joinWithSmaller</code>.</p>
+
+<h3 id="computing-similarity">Computing similarity</h3>
+
+<p>In order to determine how similar two movies are to each other, we must (as per Ed’s post again):</p>
+
+<blockquote>
+  <ul>
+    <li>For every pair of movies A and B, find all the people who rated both A and B.</li>
+    <li>Use these ratings to form a Movie A vector and a Movie B vector.</li>
+    <li>Calculate the correlation between these two vectors.</li>
+    <li>Whenever someone watches a movie, you can then recommend the movies most correlated with it.</li>
+  </ul>
+</blockquote>
+
+<p>This is item-based collaborative filtering. So let’s compute the first two steps above:</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Scalding</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * To get all pairs of co-rated movies, we&#39;ll join `ratings` against itself.</span>
+</span><span class="line"><span class="cm"> * So first make a dummy copy of the ratings that we can join against.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">val</span> <span class="n">ratings2</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">ratingsWithSize</span>
+</span><span class="line">    <span class="o">.</span><span class="n">rename</span><span class="o">((</span><span class="-Symbol">&#39;user</span><span class="o">,</span> <span class="-Symbol">&#39;movie</span><span class="o">,</span> <span class="-Symbol">&#39;rating</span><span class="o">,</span> <span class="-Symbol">&#39;numRaters</span><span class="o">)</span> <span class="o">-&gt;</span> <span class="o">(</span><span class="-Symbol">&#39;user2</span><span class="o">,</span> <span class="-Symbol">&#39;movie2</span><span class="o">,</span> <span class="-Symbol">&#39;rating2</span><span class="o">,</span> <span class="-Symbol">&#39;numRaters2</span><span class="o">))</span>
+</span><span class="line">
+</span><span class="line"><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * Now find all pairs of co-rated movies (pairs of movies that a user has rated) by</span>
+</span><span class="line"><span class="cm"> * joining the duplicate rating streams on their user fields, </span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">val</span> <span class="n">ratingPairs</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">ratingsWithSize</span>
+</span><span class="line">    <span class="o">.</span><span class="n">joinWithSmaller</span><span class="o">(</span><span class="-Symbol">&#39;user</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;user2</span><span class="o">,</span> <span class="n">ratings2</span><span class="o">)</span>
+</span><span class="line">    <span class="c1">// De-dupe so that we don&#39;t calculate similarity of both (A, B) and (B, A).</span>
+</span><span class="line">    <span class="o">.</span><span class="n">filter</span><span class="o">(</span><span class="-Symbol">&#39;movie</span><span class="o">,</span> <span class="-Symbol">&#39;movie2</span><span class="o">)</span> <span class="o">{</span> <span class="n">movies</span> <span class="k">:</span> <span class="o">(</span><span class="kt">String</span><span class="o">,</span> <span class="kt">String</span><span class="o">)</span> <span class="k">=&gt;</span> <span class="n">movies</span><span class="o">.</span><span class="n">_1</span> <span class="o">&lt;</span> <span class="n">movies</span><span class="o">.</span><span class="n">_2</span> <span class="o">}</span>
+</span><span class="line">    <span class="o">.</span><span class="n">project</span><span class="o">(</span><span class="-Symbol">&#39;movie</span><span class="o">,</span> <span class="-Symbol">&#39;rating</span><span class="o">,</span> <span class="-Symbol">&#39;numRaters</span><span class="o">,</span> <span class="-Symbol">&#39;movie2</span><span class="o">,</span> <span class="-Symbol">&#39;rating2</span><span class="o">,</span> <span class="-Symbol">&#39;numRaters2</span><span class="o">)</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// By grouping on (&#39;movie, &#39;movie2), we can now get all the people who rated any pair of movies.</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Spark</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="c1">// dummy copy of ratings for self join</span>
+</span><span class="line"><span class="k">val</span> <span class="n">ratings2</span> <span class="k">=</span> <span class="n">ratingsWithSize</span><span class="o">.</span><span class="n">keyBy</span><span class="o">(</span><span class="n">tup</span> <span class="k">=&gt;</span> <span class="n">tup</span><span class="o">.</span><span class="n">_1</span><span class="o">)</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// join on userid and filter movie pairs such that we don&#39;t double-count and exclude self-pairs</span>
+</span><span class="line"><span class="k">val</span> <span class="n">ratingPairs</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">ratingsWithSize</span>
+</span><span class="line">  <span class="o">.</span><span class="n">keyBy</span><span class="o">(</span><span class="n">tup</span> <span class="k">=&gt;</span> <span class="n">tup</span><span class="o">.</span><span class="n">_1</span><span class="o">)</span>
+</span><span class="line">  <span class="o">.</span><span class="n">join</span><span class="o">(</span><span class="n">ratings2</span><span class="o">)</span>
+</span><span class="line">  <span class="o">.</span><span class="n">filter</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_1</span><span class="o">.</span><span class="n">_2</span> <span class="o">&lt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>Notice how similar the APIs are with respect to the functional operations like <code>filter</code> - they each simply take a Scala closure. We then compute the various vector metrics for each ratings vector (size, dot-product, norm etc). We’ll use these to compute the various similarity metrics between pairs of movies.</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Scalding</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="cm">/**</span>
+</span><span class="line"><span class="cm"> * Compute dot products, norms, sums, and sizes of the rating vectors.</span>
+</span><span class="line"><span class="cm"> */</span>
+</span><span class="line"><span class="k">val</span> <span class="n">vectorCalcs</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">ratingPairs</span>
+</span><span class="line">    <span class="c1">// Compute (x*y, x^2, y^2), which we need for dot products and norms.</span>
+</span><span class="line">    <span class="o">.</span><span class="n">map</span><span class="o">((</span><span class="-Symbol">&#39;rating</span><span class="o">,</span> <span class="-Symbol">&#39;rating2</span><span class="o">)</span> <span class="o">-&gt;</span> <span class="o">(</span><span class="-Symbol">&#39;ratingProd</span><span class="o">,</span> <span class="-Symbol">&#39;ratingSq</span><span class="o">,</span> <span class="-Symbol">&#39;rating2Sq</span><span class="o">))</span> <span class="o">{</span>
+</span><span class="line">      <span class="n">ratings</span> <span class="k">:</span> <span class="o">(</span><span class="kt">Double</span><span class="o">,</span> <span class="kt">Double</span><span class="o">)</span> <span class="k">=&gt;</span>
+</span><span class="line">      <span class="o">(</span><span class="n">ratings</span><span class="o">.</span><span class="n">_1</span> <span class="o">*</span> <span class="n">ratings</span><span class="o">.</span><span class="n">_2</span><span class="o">,</span> <span class="n">math</span><span class="o">.</span><span class="n">pow</span><span class="o">(</span><span class="n">ratings</span><span class="o">.</span><span class="n">_1</span><span class="o">,</span> <span class="mi">2</span><span class="o">),</span> <span class="n">math</span><span class="o">.</span><span class="n">pow</span><span class="o">(</span><span class="n">ratings</span><span class="o">.</span><span class="n">_2</span><span class="o">,</span> <span class="mi">2</span><span class="o">))</span>
+</span><span class="line">    <span class="o">}</span>
+</span><span class="line">    <span class="o">.</span><span class="n">groupBy</span><span class="o">(</span><span class="-Symbol">&#39;movie</span><span class="o">,</span> <span class="-Symbol">&#39;movie2</span><span class="o">)</span> <span class="o">{</span> <span class="n">group</span> <span class="k">=&gt;</span>
+</span><span class="line">        <span class="n">group</span><span class="o">.</span><span class="n">size</span> <span class="c1">// length of each vector</span>
+</span><span class="line">        <span class="o">.</span><span class="n">sum</span><span class="o">(</span><span class="-Symbol">&#39;ratingProd</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;dotProduct</span><span class="o">)</span>
+</span><span class="line">        <span class="o">.</span><span class="n">sum</span><span class="o">(</span><span class="-Symbol">&#39;rating</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;ratingSum</span><span class="o">)</span>
+</span><span class="line">        <span class="o">.</span><span class="n">sum</span><span class="o">(</span><span class="-Symbol">&#39;rating2</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;rating2Sum</span><span class="o">)</span>
+</span><span class="line">        <span class="o">.</span><span class="n">sum</span><span class="o">(</span><span class="-Symbol">&#39;ratingSq</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;ratingNormSq</span><span class="o">)</span>
+</span><span class="line">        <span class="o">.</span><span class="n">sum</span><span class="o">(</span><span class="-Symbol">&#39;rating2Sq</span> <span class="o">-&gt;</span> <span class="-Symbol">&#39;rating2NormSq</span><span class="o">)</span>
+</span><span class="line">        <span class="o">.</span><span class="n">max</span><span class="o">(</span><span class="-Symbol">&#39;numRaters</span><span class="o">)</span> <span class="c1">// Just an easy way to make sure the numRaters field stays.</span>
+</span><span class="line">        <span class="o">.</span><span class="n">max</span><span class="o">(</span><span class="-Symbol">&#39;numRaters2</span><span class="o">)</span>
+</span><span class="line">        <span class="c1">// All of these operations chain together like in a builder object.</span>
+</span><span class="line">    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Spark</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+<span class="line-number">20</span>
+<span class="line-number">21</span>
+<span class="line-number">22</span>
+<span class="line-number">23</span>
+<span class="line-number">24</span>
+<span class="line-number">25</span>
+<span class="line-number">26</span>
+<span class="line-number">27</span>
+<span class="line-number">28</span>
+<span class="line-number">29</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="c1">// compute raw inputs to similarity metrics for each movie pair</span>
+</span><span class="line"><span class="k">val</span> <span class="n">vectorCalcs</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">ratingPairs</span>
+</span><span class="line">  <span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">data</span> <span class="k">=&gt;</span> <span class="o">{</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">key</span> <span class="k">=</span> <span class="o">(</span><span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_1</span><span class="o">.</span><span class="n">_2</span><span class="o">,</span> <span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">)</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">stats</span> <span class="k">=</span>
+</span><span class="line">      <span class="o">(</span><span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_1</span><span class="o">.</span><span class="n">_3</span> <span class="o">*</span> <span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_3</span><span class="o">,</span> <span class="c1">// rating 1 * rating 2</span>
+</span><span class="line">        <span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_1</span><span class="o">.</span><span class="n">_3</span><span class="o">,</span>                <span class="c1">// rating movie 1</span>
+</span><span class="line">        <span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_3</span><span class="o">,</span>                <span class="c1">// rating movie 2</span>
+</span><span class="line">        <span class="n">math</span><span class="o">.</span><span class="n">pow</span><span class="o">(</span><span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_1</span><span class="o">.</span><span class="n">_3</span><span class="o">,</span> <span class="mi">2</span><span class="o">),</span>   <span class="c1">// square of rating movie 1</span>
+</span><span class="line">        <span class="n">math</span><span class="o">.</span><span class="n">pow</span><span class="o">(</span><span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_3</span><span class="o">,</span> <span class="mi">2</span><span class="o">),</span>   <span class="c1">// square of rating movie 2</span>
+</span><span class="line">        <span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_1</span><span class="o">.</span><span class="n">_4</span><span class="o">,</span>                <span class="c1">// number of raters movie 1</span>
+</span><span class="line">        <span class="n">data</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_2</span><span class="o">.</span><span class="n">_4</span><span class="o">)</span>                <span class="c1">// number of raters movie 2</span>
+</span><span class="line">    <span class="o">(</span><span class="n">key</span><span class="o">,</span> <span class="n">stats</span><span class="o">)</span>
+</span><span class="line">  <span class="o">})</span>
+</span><span class="line">  <span class="o">.</span><span class="n">groupByKey</span><span class="o">()</span>
+</span><span class="line">  <span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">data</span> <span class="k">=&gt;</span> <span class="o">{</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">key</span> <span class="k">=</span> <span class="n">data</span><span class="o">.</span><span class="n">_1</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">vals</span> <span class="k">=</span> <span class="n">data</span><span class="o">.</span><span class="n">_2</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">size</span> <span class="k">=</span> <span class="n">vals</span><span class="o">.</span><span class="n">size</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">dotProduct</span> <span class="k">=</span> <span class="n">vals</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_1</span><span class="o">).</span><span class="n">sum</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">ratingSum</span> <span class="k">=</span> <span class="n">vals</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_2</span><span class="o">).</span><span class="n">sum</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">rating2Sum</span> <span class="k">=</span> <span class="n">vals</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_3</span><span class="o">).</span><span class="n">sum</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">ratingSq</span> <span class="k">=</span> <span class="n">vals</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_4</span><span class="o">).</span><span class="n">sum</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">rating2Sq</span> <span class="k">=</span> <span class="n">vals</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_5</span><span class="o">).</span><span class="n">sum</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">numRaters</span> <span class="k">=</span> <span class="n">vals</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_6</span><span class="o">).</span><span class="n">max</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">numRaters2</span> <span class="k">=</span> <span class="n">vals</span><span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">f</span> <span class="k">=&gt;</span> <span class="n">f</span><span class="o">.</span><span class="n">_7</span><span class="o">).</span><span class="n">max</span>
+</span><span class="line">    <span class="o">(</span><span class="n">key</span><span class="o">,</span> <span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">dotProduct</span><span class="o">,</span> <span class="n">ratingSum</span><span class="o">,</span> <span class="n">rating2Sum</span><span class="o">,</span> <span class="n">ratingSq</span><span class="o">,</span> <span class="n">rating2Sq</span><span class="o">,</span> <span class="n">numRaters</span><span class="o">,</span> <span class="n">numRaters2</span><span class="o">))</span>
+</span><span class="line">  <span class="o">})</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<h3 id="similarity-metrics">Similarity metrics</h3>
+
+<p>For each movie pair we compute <em>correlation</em>, <em>regularized correlation</em>, <em>cosine similarity</em> and <em>Jaccard similarity</em> (see Ed’s post and the code for full details).</p>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Scalding</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="k">val</span> <span class="nc">PRIOR_COUNT</span> <span class="k">=</span> <span class="mi">10</span>
+</span><span class="line"><span class="k">val</span> <span class="nc">PRIOR_CORRELATION</span> <span class="k">=</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line"><span class="k">val</span> <span class="n">similarities</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">vectorCalcs</span>
+</span><span class="line">    <span class="o">.</span><span class="n">map</span><span class="o">((</span><span class="-Symbol">&#39;size</span><span class="o">,</span> <span class="-Symbol">&#39;dotProduct</span><span class="o">,</span> <span class="-Symbol">&#39;ratingSum</span><span class="o">,</span> <span class="-Symbol">&#39;rating2Sum</span><span class="o">,</span> <span class="-Symbol">&#39;ratingNormSq</span><span class="o">,</span> <span class="-Symbol">&#39;rating2NormSq</span><span class="o">,</span> <span class="-Symbol">&#39;numRaters</span><span class="o">,</span> <span class="-Symbol">&#39;numRaters2</span><span class="o">)</span> <span class="o">-&gt;</span>
+</span><span class="line">      <span class="o">(</span><span class="-Symbol">&#39;correlation</span><span class="o">,</span> <span class="-Symbol">&#39;regularizedCorrelation</span><span class="o">,</span> <span class="-Symbol">&#39;cosineSimilarity</span><span class="o">,</span> <span class="-Symbol">&#39;jaccardSimilarity</span><span class="o">))</span> <span class="o">{</span>
+</span><span class="line">
+</span><span class="line">      <span class="n">fields</span> <span class="k">:</span> <span class="o">(</span><span class="kt">Double</span><span class="o">,</span> <span class="kt">Double</span><span class="o">,</span> <span class="nc">Double</span><span class="o">,</span> <span class="nc">Double</span><span class="o">,</span> <span class="nc">Double</span><span class="o">,</span> <span class="nc">Double</span><span class="o">,</span> <span class="nc">Double</span><span class="o">,</span> <span class="nc">Double</span><span class="o">)</span> <span class="k">=&gt;</span>
+</span><span class="line">
+</span><span class="line">      <span class="k">val</span> <span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">dotProduct</span><span class="o">,</span> <span class="n">ratingSum</span><span class="o">,</span> <span class="n">rating2Sum</span><span class="o">,</span> <span class="n">ratingNormSq</span><span class="o">,</span> <span class="n">rating2NormSq</span><span class="o">,</span> <span class="n">numRaters</span><span class="o">,</span> <span class="n">numRaters2</span><span class="o">)</span> <span class="k">=</span> <span class="n">fields</span>
+</span><span class="line">
+</span><span class="line">      <span class="k">val</span> <span class="n">corr</span> <span class="k">=</span> <span class="n">correlation</span><span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">dotProduct</span><span class="o">,</span> <span class="n">ratingSum</span><span class="o">,</span> <span class="n">rating2Sum</span><span class="o">,</span> <span class="n">ratingNormSq</span><span class="o">,</span> <span class="n">rating2NormSq</span><span class="o">)</span>
+</span><span class="line">      <span class="k">val</span> <span class="n">regCorr</span> <span class="k">=</span> <span class="n">regularizedCorrelation</span><span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">dotProduct</span><span class="o">,</span> <span class="n">ratingSum</span><span class="o">,</span> <span class="n">rating2Sum</span><span class="o">,</span> <span class="n">ratingNormSq</span><span class="o">,</span> <span class="n">rating2NormSq</span><span class="o">,</span> <span class="nc">PRIOR_COUNT</span><span class="o">,</span> <span class="nc">PRIOR_CORRELATION</span><span class="o">)</span>
+</span><span class="line">      <span class="k">val</span> <span class="n">cosSim</span> <span class="k">=</span> <span class="n">cosineSimilarity</span><span class="o">(</span><span class="n">dotProduct</span><span class="o">,</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="o">(</span><span class="n">ratingNormSq</span><span class="o">),</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="o">(</span><span class="n">rating2NormSq</span><span class="o">))</span>
+</span><span class="line">      <span class="k">val</span> <span class="n">jaccard</span> <span class="k">=</span> <span class="n">jaccardSimilarity</span><span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">numRaters</span><span class="o">,</span> <span class="n">numRaters2</span><span class="o">)</span>
+</span><span class="line">
+</span><span class="line">      <span class="o">(</span><span class="n">corr</span><span class="o">,</span> <span class="n">regCorr</span><span class="o">,</span> <span class="n">cosSim</span><span class="o">,</span> <span class="n">jaccard</span><span class="o">)</span>
+</span><span class="line">    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<div class="bogus-wrapper"><notextile><figure class="code"><figcaption><span>Spark</span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class="line-number">1</span>
+<span class="line-number">2</span>
+<span class="line-number">3</span>
+<span class="line-number">4</span>
+<span class="line-number">5</span>
+<span class="line-number">6</span>
+<span class="line-number">7</span>
+<span class="line-number">8</span>
+<span class="line-number">9</span>
+<span class="line-number">10</span>
+<span class="line-number">11</span>
+<span class="line-number">12</span>
+<span class="line-number">13</span>
+<span class="line-number">14</span>
+<span class="line-number">15</span>
+<span class="line-number">16</span>
+<span class="line-number">17</span>
+<span class="line-number">18</span>
+<span class="line-number">19</span>
+</pre></td><td class="code"><pre><code class="scala"><span class="line"><span class="k">val</span> <span class="nc">PRIOR_COUNT</span> <span class="k">=</span> <span class="mi">10</span>
+</span><span class="line"><span class="k">val</span> <span class="nc">PRIOR_CORRELATION</span> <span class="k">=</span> <span class="mi">0</span>
+</span><span class="line">
+</span><span class="line"><span class="c1">// compute similarity metrics for each movie pair</span>
+</span><span class="line"><span class="k">val</span> <span class="n">similarities</span> <span class="k">=</span>
+</span><span class="line">  <span class="n">vectorCalcs</span>
+</span><span class="line">  <span class="o">.</span><span class="n">map</span><span class="o">(</span><span class="n">fields</span> <span class="k">=&gt;</span> <span class="o">{</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">val</span> <span class="n">key</span> <span class="k">=</span> <span class="n">fields</span><span class="o">.</span><span class="n">_1</span>
+</span><span class="line">    <span class="k">val</span> <span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">dotProduct</span><span class="o">,</span> <span class="n">ratingSum</span><span class="o">,</span> <span class="n">rating2Sum</span><span class="o">,</span> <span class="n">ratingNormSq</span><span class="o">,</span> <span class="n">rating2NormSq</span><span class="o">,</span> <span class="n">numRaters</span><span class="o">,</span> <span class="n">numRaters2</span><span class="o">)</span> <span class="k">=</span> <span class="n">fields</span><span class="o">.</span><span class="n">_2</span>
+</span><span class="line">
+</span><span class="line">    <span class="k">val</span> <span class="n">corr</span> <span class="k">=</span> <span class="n">correlation</span><span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">dotProduct</span><span class="o">,</span> <span class="n">ratingSum</span><span class="o">,</span> <span class="n">rating2Sum</span><span class="o">,</span> <span class="n">ratingNormSq</span><span class="o">,</span> <span class="n">rating2NormSq</span><span class="o">)</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">regCorr</span> <span class="k">=</span> <span class="n">regularizedCorrelation</span><span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">dotProduct</span><span class="o">,</span> <span class="n">ratingSum</span><span class="o">,</span> <span class="n">rating2Sum</span><span class="o">,</span>
+</span><span class="line">      <span class="n">ratingNormSq</span><span class="o">,</span> <span class="n">rating2NormSq</span><span class="o">,</span> <span class="nc">PRIOR_COUNT</span><span class="o">,</span> <span class="nc">PRIOR_CORRELATION</span><span class="o">)</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">cosSim</span> <span class="k">=</span> <span class="n">cosineSimilarity</span><span class="o">(</span><span class="n">dotProduct</span><span class="o">,</span> <span class="n">scala</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="o">(</span><span class="n">ratingNormSq</span><span class="o">),</span> <span class="n">scala</span><span class="o">.</span><span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="o">(</span><span class="n">rating2NormSq</span><span class="o">))</span>
+</span><span class="line">    <span class="k">val</span> <span class="n">jaccard</span> <span class="k">=</span> <span class="n">jaccardSimilarity</span><span class="o">(</span><span class="n">size</span><span class="o">,</span> <span class="n">numRaters</span><span class="o">,</span> <span class="n">numRaters2</span><span class="o">)</span>
+</span><span class="line">
+</span><span class="line">    <span class="o">(</span><span class="n">key</span><span class="o">,</span> <span class="o">(</span><span class="n">corr</span><span class="o">,</span> <span class="n">regCorr</span><span class="o">,</span> <span class="n">cosSim</span><span class="o">,</span> <span class="n">jaccard</span><span class="o">))</span>
+</span><span class="line">  <span class="o">})</span>
+</span></code></pre></td></tr></table></div></figure></notextile></div>
+
+<p>The nice thing here is that, once the raw input metrics themselves are computed, we can use the exact same functions from the Scalding example to compute the similarity metrics as can be seen above - I simply copy-and-pasted Ed’s <code>correlation</code>, <code>regularizedCorrelation</code>, <code>cosineSimilarity</code> and <code>jaccardSimilarity</code> functions!</p>
+
+<h3 id="some-results">Some results</h3>
+
+<p>So, what do the results look like after putting all of this together? Since I used a different input data source we won’t get the same results, but we’d hope that most of them would make sense. Similarly to Ed’s results, I found that using raw <code>correlation</code> resulted in sub-optimal similarities (at least from eye-balling and “sense checking”), since some movie pairs have very few common raters (many had just 1 rater in common).</p>
+
+<p>I also found that <code>cosine similarity</code> didn’t do so well on a “sense check” basis either, which was somewhat surprising since this is usually the standard similarity metric for collaborative filtering. This seems to be due to a lot of movies having cosine similarity of 1.0, so perhaps I have messed up the calculation somewhere (if you spot an error please let me know).</p>
+
+<p>In any case, here are the top 10 movies most similar to Die Hard (1998), ranked by <code>regularized correlation</code>:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: center">Movie 1</th>
+      <th style="text-align: center">Movie 2</th>
+      <th style="text-align: center">Correlation</th>
+      <th style="text-align: center">Reg Correlation</th>
+      <th style="text-align: center">Cosine Similarity</th>
+      <th style="text-align: center">Jaccard Similarity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Die Hard: With a Vengeance (1995)</td>
+      <td style="text-align: center">0.5413</td>
+      <td style="text-align: center">0.4946</td>
+      <td style="text-align: center">0.9692</td>
+      <td style="text-align: center">0.4015</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Die Hard 2 (1990)</td>
+      <td style="text-align: center">0.4868</td>
+      <td style="text-align: center">0.4469</td>
+      <td style="text-align: center">0.9687</td>
+      <td style="text-align: center">0.4088</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Bananas (1971)</td>
+      <td style="text-align: center">0.5516</td>
+      <td style="text-align: center">0.4390</td>
+      <td style="text-align: center">0.9745</td>
+      <td style="text-align: center">0.1618</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Good, The Bad and The Ugly, The (1966)</td>
+      <td style="text-align: center">0.4608</td>
+      <td style="text-align: center">0.4032</td>
+      <td style="text-align: center">0.9743</td>
+      <td style="text-align: center">0.2518</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Hunt for Red October, The (1990)</td>
+      <td style="text-align: center">0.4260</td>
+      <td style="text-align: center">0.3944</td>
+      <td style="text-align: center">0.9721</td>
+      <td style="text-align: center">0.4098</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">City Slickers II: The Legend of Curly’s Gold (1994)</td>
+      <td style="text-align: center">0.5349</td>
+      <td style="text-align: center">0.3903</td>
+      <td style="text-align: center">0.9506</td>
+      <td style="text-align: center">0.1116</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Grease 2 (1982)</td>
+      <td style="text-align: center">0.6502</td>
+      <td style="text-align: center">0.3901</td>
+      <td style="text-align: center">0.9449</td>
+      <td style="text-align: center">0.0647</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Star Trek: The Wrath of Khan (1982)</td>
+      <td style="text-align: center">0.4160</td>
+      <td style="text-align: center">0.3881</td>
+      <td style="text-align: center">0.9675</td>
+      <td style="text-align: center">0.4441</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Sphere (1998)</td>
+      <td style="text-align: center">0.7722</td>
+      <td style="text-align: center">0.3861</td>
+      <td style="text-align: center">0.9893</td>
+      <td style="text-align: center">0.0403</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Field of Dreams (1989)</td>
+      <td style="text-align: center">0.4126</td>
+      <td style="text-align: center">0.3774</td>
+      <td style="text-align: center">0.9630</td>
+      <td style="text-align: center">0.3375</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><br />
+Looks fairly reasonable! And here are the 10 most similar to Il Postino:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: center">Movie 1</th>
+      <th style="text-align: center">Movie 2</th>
+      <th style="text-align: center">Correlation</th>
+      <th style="text-align: center">Reg Correlation</th>
+      <th style="text-align: center">Cosine Similarity</th>
+      <th style="text-align: center">Jaccard Similarity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Bottle Rocket (1996)</td>
+      <td style="text-align: center">0.8789</td>
+      <td style="text-align: center">0.4967</td>
+      <td style="text-align: center">0.9855</td>
+      <td style="text-align: center">0.0699</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Looking for Richard (1996)</td>
+      <td style="text-align: center">0.7112</td>
+      <td style="text-align: center">0.4818</td>
+      <td style="text-align: center">0.9820</td>
+      <td style="text-align: center">0.1123</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Ridicule (1996)</td>
+      <td style="text-align: center">0.6550</td>
+      <td style="text-align: center">0.4780</td>
+      <td style="text-align: center">0.9759</td>
+      <td style="text-align: center">0.1561</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">When We Were Kings (1996)</td>
+      <td style="text-align: center">0.7581</td>
+      <td style="text-align: center">0.4773</td>
+      <td style="text-align: center">0.9888</td>
+      <td style="text-align: center">0.0929</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Mother Night (1996)</td>
+      <td style="text-align: center">0.8802</td>
+      <td style="text-align: center">0.4611</td>
+      <td style="text-align: center">0.9848</td>
+      <td style="text-align: center">0.0643</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Kiss Me, Guido (1997)</td>
+      <td style="text-align: center">0.9759</td>
+      <td style="text-align: center">0.4337</td>
+      <td style="text-align: center">0.9974</td>
+      <td style="text-align: center">0.0452</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Blue in the Face (1995)</td>
+      <td style="text-align: center">0.6372</td>
+      <td style="text-align: center">0.4317</td>
+      <td style="text-align: center">0.9585</td>
+      <td style="text-align: center">0.1148</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Othello (1995)</td>
+      <td style="text-align: center">0.5875</td>
+      <td style="text-align: center">0.4287</td>
+      <td style="text-align: center">0.9774</td>
+      <td style="text-align: center">0.1330</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">English Patient, The (1996)</td>
+      <td style="text-align: center">0.4586</td>
+      <td style="text-align: center">0.4210</td>
+      <td style="text-align: center">0.9603</td>
+      <td style="text-align: center">0.2494</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Mediterraneo (1991)</td>
+      <td style="text-align: center">0.6200</td>
+      <td style="text-align: center">0.4200</td>
+      <td style="text-align: center">0.9879</td>
+      <td style="text-align: center">0.1235</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><br />
+How about Star Wars?</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: center">Movie 1</th>
+      <th style="text-align: center">Movie 2</th>
+      <th style="text-align: center">Correlation</th>
+      <th style="text-align: center">Reg Correlation</th>
+      <th style="text-align: center">Cosine Similarity</th>
+      <th style="text-align: center">Jaccard Similarity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Empire Strikes Back, The (1980)</td>
+      <td style="text-align: center">0.7419</td>
+      <td style="text-align: center">0.7168</td>
+      <td style="text-align: center">0.9888</td>
+      <td style="text-align: center">0.5306</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Return of the Jedi (1983)</td>
+      <td style="text-align: center">0.6714</td>
+      <td style="text-align: center">0.6539</td>
+      <td style="text-align: center">0.9851</td>
+      <td style="text-align: center">0.6708</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Raiders of the Lost Ark (1981)</td>
+      <td style="text-align: center">0.5074</td>
+      <td style="text-align: center">0.4917</td>
+      <td style="text-align: center">0.9816</td>
+      <td style="text-align: center">0.5607</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Meet John Doe (1941)</td>
+      <td style="text-align: center">0.6396</td>
+      <td style="text-align: center">0.4397</td>
+      <td style="text-align: center">0.9840</td>
+      <td style="text-align: center">0.0442</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Love in the Afternoon (1957)</td>
+      <td style="text-align: center">0.9234</td>
+      <td style="text-align: center">0.4374</td>
+      <td style="text-align: center">0.9912</td>
+      <td style="text-align: center">0.0181</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Man of the Year (1995)</td>
+      <td style="text-align: center">1.0000</td>
+      <td style="text-align: center">0.4118</td>
+      <td style="text-align: center">0.9995</td>
+      <td style="text-align: center">0.0141</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">When We Were Kings (1996)</td>
+      <td style="text-align: center">0.5278</td>
+      <td style="text-align: center">0.4021</td>
+      <td style="text-align: center">0.9737</td>
+      <td style="text-align: center">0.0637</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Cry, the Beloved Country (1995)</td>
+      <td style="text-align: center">0.7001</td>
+      <td style="text-align: center">0.3957</td>
+      <td style="text-align: center">0.9763</td>
+      <td style="text-align: center">0.0257</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">To Be or Not to Be (1942)</td>
+      <td style="text-align: center">0.6999</td>
+      <td style="text-align: center">0.3956</td>
+      <td style="text-align: center">0.9847</td>
+      <td style="text-align: center">0.0261</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Haunted World of Edward D. Wood Jr., The (1995)</td>
+      <td style="text-align: center">0.6891</td>
+      <td style="text-align: center">0.3895</td>
+      <td style="text-align: center">0.9758</td>
+      <td style="text-align: center">0.0262</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><br />
+Finally, what about the 10 most <em>dissimilar</em> to Star Wars?</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: center">Movie 1</th>
+      <th style="text-align: center">Movie 2</th>
+      <th style="text-align: center">Correlation</th>
+      <th style="text-align: center">Reg Correlation</th>
+      <th style="text-align: center">Cosine Similarity</th>
+      <th style="text-align: center">Jaccard Similarity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Fathers’ Day (1997)</td>
+      <td style="text-align: center">-0.6625</td>
+      <td style="text-align: center">-0.4417</td>
+      <td style="text-align: center">0.9074</td>
+      <td style="text-align: center">0.0397</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Jason’s Lyric (1994)</td>
+      <td style="text-align: center">-0.9661</td>
+      <td style="text-align: center">-0.3978</td>
+      <td style="text-align: center">0.8110</td>
+      <td style="text-align: center">0.0141</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Lightning Jack (1994)</td>
+      <td style="text-align: center">-0.7906</td>
+      <td style="text-align: center">-0.3953</td>
+      <td style="text-align: center">0.9361</td>
+      <td style="text-align: center">0.0202</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Marked for Death (1990)</td>
+      <td style="text-align: center">-0.5922</td>
+      <td style="text-align: center">-0.3807</td>
+      <td style="text-align: center">0.8729</td>
+      <td style="text-align: center">0.0361</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Mixed Nuts (1994)</td>
+      <td style="text-align: center">-0.6219</td>
+      <td style="text-align: center">-0.3731</td>
+      <td style="text-align: center">0.8806</td>
+      <td style="text-align: center">0.0303</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Poison Ivy II (1995)</td>
+      <td style="text-align: center">-0.7443</td>
+      <td style="text-align: center">-0.3722</td>
+      <td style="text-align: center">0.7169</td>
+      <td style="text-align: center">0.0201</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">In the Realm of the Senses (Ai no corrida) (1976)</td>
+      <td style="text-align: center">-0.8090</td>
+      <td style="text-align: center">-0.3596</td>
+      <td style="text-align: center">0.8108</td>
+      <td style="text-align: center">0.0162</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">What Happened Was… (1994)</td>
+      <td style="text-align: center">-0.9045</td>
+      <td style="text-align: center">-0.3392</td>
+      <td style="text-align: center">0.8781</td>
+      <td style="text-align: center">0.0121</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Female Perversions (1996)</td>
+      <td style="text-align: center">-0.8039</td>
+      <td style="text-align: center">-0.3310</td>
+      <td style="text-align: center">0.8670</td>
+      <td style="text-align: center">0.0141</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Celtic Pride (1996)</td>
+      <td style="text-align: center">-0.6062</td>
+      <td style="text-align: center">-0.3175</td>
+      <td style="text-align: center">0.8998</td>
+      <td style="text-align: center">0.0220</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><br />
+I’ll leave it to you to decide on the accuracy.</p>
+
+<h2 id="conclusion-and-next-steps">Conclusion and Next Steps</h2>
+
+<p>Hopefully this gives a taste for Spark and how it can be used in a very similar manner to Scalding and MapReduce - with all the advantages of HDFS compatability, in-memory caching capabilities, low-latency execution and other distributed-memory primitives (such as broadcast variables and accumulators); not to mention interactive analysis via the Scala/Spark console, and a Java and Python API! Check out the documentation, tutorials and examples <a href="http://spark-project.org/docs/latest/">here</a>.</p>
+
+<p>One issue that is apparent from the above code snippets is that Scalding’s API is somewhat cleaner when doing complex field manipulations and joins, due to the ability to have named fields as Scala <code>Symbols</code>, e.g.
+<code>tweets.map('tweet -&gt; 'length) { tweet : String =&gt; tweet.size }</code></p>
+
+<p>The lack of named fields in Spark’s API does lead to some messy tuple-unpacking and makes keeping track of which fields are which more complex. This could be an interesting potential addition to Spark.</p>
+
+<p>Finally, please do let me know if you find any issues or errors. And thanks to the Spark team for a fantastic project!</p>
+</div>
+  
+  
+
+
+    </article>
+  
   <div class="pagination">
     
     <a href="/blog/archives">Blog Archives</a>
@@ -76,6 +927,10 @@
     <section>
   <h1>Recent Posts</h1>
   <ul id="recent_posts">
+    
+      <li class="post">
+        <a href="/blog/2013/04/01/movie-recommendations-and-more-with-spark/">Movie recommendations and more with Spark</a>
+      </li>
     
   </ul>
 </section>

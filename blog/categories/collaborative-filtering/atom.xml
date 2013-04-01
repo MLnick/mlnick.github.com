@@ -1,0 +1,677 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: collaborative filtering | Crouching Data, Hidden Markov]]></title>
+  <link href="http://MLnick.github.com/blog/categories/collaborative-filtering/atom.xml" rel="self"/>
+  <link href="http://MLnick.github.com/"/>
+  <updated>2013-04-01T20:30:18+02:00</updated>
+  <id>http://MLnick.github.com/</id>
+  <author>
+    <name><![CDATA[Nick Pentreath]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[Movie recommendations and more with Spark]]></title>
+    <link href="http://MLnick.github.com/blog/2013/04/01/movie-recommendations-and-more-with-spark/"/>
+    <updated>2013-04-01T11:20:00+02:00</updated>
+    <id>http://MLnick.github.com/blog/2013/04/01/movie-recommendations-and-more-with-spark</id>
+    <content type="html"><![CDATA[<p><em>This post is inspired by <a href="http://blog.echen.me/2012/02/09/movie-recommendations-and-more-via-mapreduce-and-scalding/">Edwin Chen’s post on Scalding</a>. I encourage you to first read that post! The Spark code is adapted from his Scalding code and is available in full <a href="https://gist.github.com/MLnick/5286475s">here</a>.</em></p>
+
+<p>As outlined in Ed’s post, Scalding is a Scala DSL for Hadoop MapReduce that makes it easier, more natural and more concise to write MapReduce workflows. The Scala code ultimately compiles down to MapReduce jobs via <a href="http://www.cascading.org/">Cascading</a>.</p>
+
+<h2 id="spark">Spark</h2>
+
+<p>The <a href="http://www.spark-project.org/">Spark Project</a> is a cluster computing framework that emphasizes low-latency job execution and in-memory caching to provide speed. It can run up to 100x faster than Hadoop MapReduce (when all the data is cached in memory) as a result. It is written in Scala, but also has Java and Python APIs. It is fully compatible with HDFS and any Hadoop <code>InputFormat/OutputFormat</code>, but is independent of Hadoop MapReduce. </p>
+
+<p>The Spark API bears many similarities to Scalding, providing a way to write natural Scala code instead of <code>Mappers</code> and <code>Reducers</code>. Taking Ed’s example:</p>
+
+<p><code>scala Scalding
+// Create a histogram of tweet lengths.
+tweets.map('tweet -&gt; 'length) { tweet : String =&gt; tweet.size }.groupBy('length) { _.size }
+</code></p>
+
+<p><code>scala Spark
+// Create a histogram of tweet lengths.
+tweets.groupBy(tweet : String =&gt; tweet.size).map(pair =&gt; (pair._1, pair._2.size))
+</code></p>
+
+<h2 id="movie-similarities">Movie Similarities</h2>
+
+<p>I’ve recently been experimenting a lot with Spark, and thought it would be interesting to compare Ed’s approach to computing movie similarities in Scalding with Spark. So I’ve ported his Scalding code over to Spark and we’ll compare the two as we go along. For a basic introduction to Spark’s API see the <a href="http://spark-project.org/docs/latest/quick-start.html">Spark Quickstart</a>.</p>
+
+<p>Firstly, we read the ratings from a file. Since I don’t have access to a nice Twitter tweet datasource, I used the <a href="http://www.grouplens.org/node/73">MovieLens 100k rating dataset</a>. The training set ratings are in a file called <code>ua.base</code>, while the movie item data is in <code>u.item</code>.</p>
+
+<p>``` scala Scalding
+/**
+ * The input is a TSV file with three columns: (user, movie, rating).
+ */
+val INPUT_FILENAME = “data/ratings.tsv”</p>
+
+<p>/**
+ * Read in the input and give each field a type and name.
+ */
+val ratings = Tsv(INPUT_FILENAME, (‘user, ‘movie, ‘rating))</p>
+
+<p>/**
+ * Let’s also keep track of the total number of people who rated each movie.
+ */
+val numRaters =
+  ratings
+    // Put the number of people who rated each movie into a field called “numRaters”.  <br />
+    .groupBy(‘movie) { _.size }.rename(‘size -&gt; ‘numRaters)</p>
+
+<p>// Merge <code>ratings</code> with <code>numRaters</code>, by joining on their movie fields.
+val ratingsWithSize =
+  ratings.joinWithSmaller(‘movie -&gt; ‘movie, numRaters)</p>
+
+<p>// ratingsWithSize now contains the following fields: (user, movie, rating, numRaters).
+```</p>
+
+<p>``` scala Spark
+val TRAIN_FILENAME = “ua.base”
+val MOVIES_FILENAME = “u.item”</p>
+
+<p>// Spark programs require a SparkContext to be initialized
+val sc = new SparkContext(master, “MovieSimilarities”)</p>
+
+<p>// extract (userid, movieid, rating) from ratings data
+val ratings = sc.textFile(TRAIN_FILENAME)
+  .map(line =&gt; {
+    val fields = line.split(“\t”)
+    (fields(0).toInt, fields(1).toInt, fields(2).toInt)
+})</p>
+
+<p>// get num raters per movie, keyed on movie id
+val numRatersPerMovie = ratings
+  .groupBy(tup =&gt; tup.<em>2)
+  .map(grouped =&gt; (grouped.</em>1, grouped._2.size))</p>
+
+<p>// join ratings with num raters on movie id
+val ratingsWithSize = ratings
+  .groupBy(tup =&gt; tup.<em>2)
+  .join(numRatersPerMovie)
+  .flatMap(joined =&gt; {
+    joined.</em>2.<em>1.map(f =&gt; (f.</em>1, f.<em>2, f.</em>3, joined.<em>2.</em>2))
+})</p>
+
+<p>// ratingsWithSize now contains the following fields: (user, movie, rating, numRaters).
+```</p>
+
+<p>Similarly to Scalding’s <code>Tsv</code> method, which reads a TSV file from HDFS, Spark’s <code>sc.textFile</code> method reads a text file from HDFS. However it’s up to us to specify how to split the fields.</p>
+
+<p>Also, Spark’s API for joins is a little lower-level than Scalding’s, hence we have to <code>groupBy</code> first and transform after the <code>join</code> with a <code>flatMap</code> operation to get the fields we want. Scalding actually does something similar under the hood of <code>joinWithSmaller</code>.</p>
+
+<h3 id="computing-similarity">Computing similarity</h3>
+
+<p>In order to determine how similar two movies are to each other, we must (as per Ed’s post again):</p>
+
+<blockquote>
+  <ul>
+    <li>For every pair of movies A and B, find all the people who rated both A and B.</li>
+    <li>Use these ratings to form a Movie A vector and a Movie B vector.</li>
+    <li>Calculate the correlation between these two vectors.</li>
+    <li>Whenever someone watches a movie, you can then recommend the movies most correlated with it.</li>
+  </ul>
+</blockquote>
+
+<p>This is item-based collaborative filtering. So let’s compute the first two steps above:</p>
+
+<p>``` scala Scalding
+/**
+ * To get all pairs of co-rated movies, we’ll join <code>ratings</code> against itself.
+ * So first make a dummy copy of the ratings that we can join against.
+ */
+val ratings2 =
+  ratingsWithSize
+    .rename((‘user, ‘movie, ‘rating, ‘numRaters) -&gt; (‘user2, ‘movie2, ‘rating2, ‘numRaters2))</p>
+
+<p>/**
+ * Now find all pairs of co-rated movies (pairs of movies that a user has rated) by
+ * joining the duplicate rating streams on their user fields, 
+ */
+val ratingPairs =
+  ratingsWithSize
+    .joinWithSmaller(‘user -&gt; ‘user2, ratings2)
+    // De-dupe so that we don’t calculate similarity of both (A, B) and (B, A).
+    .filter(‘movie, ‘movie2) { movies : (String, String) =&gt; movies.<em>1 &lt; movies.</em>2 }
+    .project(‘movie, ‘rating, ‘numRaters, ‘movie2, ‘rating2, ‘numRaters2)</p>
+
+<p>// By grouping on (‘movie, ‘movie2), we can now get all the people who rated any pair of movies.
+```</p>
+
+<p>``` scala Spark
+// dummy copy of ratings for self join
+val ratings2 = ratingsWithSize.keyBy(tup =&gt; tup._1)</p>
+
+<p>// join on userid and filter movie pairs such that we don’t double-count and exclude self-pairs
+val ratingPairs =
+  ratingsWithSize
+  .keyBy(tup =&gt; tup.<em>1)
+  .join(ratings2)
+  .filter(f =&gt; f.</em>2.<em>1.</em>2 &lt; f.<em>2.</em>2._2)
+```</p>
+
+<p>Notice how similar the APIs are with respect to the functional operations like <code>filter</code> - they each simply take a Scala closure. We then compute the various vector metrics for each ratings vector (size, dot-product, norm etc). We’ll use these to compute the various similarity metrics between pairs of movies.</p>
+
+<p><code>scala Scalding
+/**
+ * Compute dot products, norms, sums, and sizes of the rating vectors.
+ */
+val vectorCalcs =
+  ratingPairs
+    // Compute (x*y, x^2, y^2), which we need for dot products and norms.
+    .map(('rating, 'rating2) -&gt; ('ratingProd, 'ratingSq, 'rating2Sq)) {
+      ratings : (Double, Double) =&gt;
+      (ratings._1 * ratings._2, math.pow(ratings._1, 2), math.pow(ratings._2, 2))
+    }
+    .groupBy('movie, 'movie2) { group =&gt;
+        group.size // length of each vector
+        .sum('ratingProd -&gt; 'dotProduct)
+        .sum('rating -&gt; 'ratingSum)
+        .sum('rating2 -&gt; 'rating2Sum)
+        .sum('ratingSq -&gt; 'ratingNormSq)
+        .sum('rating2Sq -&gt; 'rating2NormSq)
+        .max('numRaters) // Just an easy way to make sure the numRaters field stays.
+        .max('numRaters2)
+        // All of these operations chain together like in a builder object.
+    }
+</code></p>
+
+<p><code>scala Spark
+// compute raw inputs to similarity metrics for each movie pair
+val vectorCalcs =
+  ratingPairs
+  .map(data =&gt; {
+    val key = (data._2._1._2, data._2._2._2)
+    val stats =
+      (data._2._1._3 * data._2._2._3, // rating 1 * rating 2
+        data._2._1._3,                // rating movie 1
+        data._2._2._3,                // rating movie 2
+        math.pow(data._2._1._3, 2),   // square of rating movie 1
+        math.pow(data._2._2._3, 2),   // square of rating movie 2
+        data._2._1._4,                // number of raters movie 1
+        data._2._2._4)                // number of raters movie 2
+    (key, stats)
+  })
+  .groupByKey()
+  .map(data =&gt; {
+    val key = data._1
+    val vals = data._2
+    val size = vals.size
+    val dotProduct = vals.map(f =&gt; f._1).sum
+    val ratingSum = vals.map(f =&gt; f._2).sum
+    val rating2Sum = vals.map(f =&gt; f._3).sum
+    val ratingSq = vals.map(f =&gt; f._4).sum
+    val rating2Sq = vals.map(f =&gt; f._5).sum
+    val numRaters = vals.map(f =&gt; f._6).max
+    val numRaters2 = vals.map(f =&gt; f._7).max
+    (key, (size, dotProduct, ratingSum, rating2Sum, ratingSq, rating2Sq, numRaters, numRaters2))
+  })
+</code></p>
+
+<h3 id="similarity-metrics">Similarity metrics</h3>
+
+<p>For each movie pair we compute <em>correlation</em>, <em>regularized correlation</em>, <em>cosine similarity</em> and <em>Jaccard similarity</em> (see Ed’s post and the code for full details).</p>
+
+<p>``` scala Scalding
+val PRIOR_COUNT = 10
+val PRIOR_CORRELATION = 0</p>
+
+<p>val similarities =
+  vectorCalcs
+    .map((‘size, ‘dotProduct, ‘ratingSum, ‘rating2Sum, ‘ratingNormSq, ‘rating2NormSq, ‘numRaters, ‘numRaters2) -&gt;
+      (‘correlation, ‘regularizedCorrelation, ‘cosineSimilarity, ‘jaccardSimilarity)) {</p>
+
+<pre><code>  fields : (Double, Double, Double, Double, Double, Double, Double, Double) =&gt;
+
+  val (size, dotProduct, ratingSum, rating2Sum, ratingNormSq, rating2NormSq, numRaters, numRaters2) = fields
+
+  val corr = correlation(size, dotProduct, ratingSum, rating2Sum, ratingNormSq, rating2NormSq)
+  val regCorr = regularizedCorrelation(size, dotProduct, ratingSum, rating2Sum, ratingNormSq, rating2NormSq, PRIOR_COUNT, PRIOR_CORRELATION)
+  val cosSim = cosineSimilarity(dotProduct, math.sqrt(ratingNormSq), math.sqrt(rating2NormSq))
+  val jaccard = jaccardSimilarity(size, numRaters, numRaters2)
+
+  (corr, regCorr, cosSim, jaccard)
+} ```
+</code></pre>
+
+<p>``` scala Spark
+val PRIOR_COUNT = 10
+val PRIOR_CORRELATION = 0</p>
+
+<p>// compute similarity metrics for each movie pair
+val similarities =
+  vectorCalcs
+  .map(fields =&gt; {</p>
+
+<pre><code>val key = fields._1
+val (size, dotProduct, ratingSum, rating2Sum, ratingNormSq, rating2NormSq, numRaters, numRaters2) = fields._2
+
+val corr = correlation(size, dotProduct, ratingSum, rating2Sum, ratingNormSq, rating2NormSq)
+val regCorr = regularizedCorrelation(size, dotProduct, ratingSum, rating2Sum,
+  ratingNormSq, rating2NormSq, PRIOR_COUNT, PRIOR_CORRELATION)
+val cosSim = cosineSimilarity(dotProduct, scala.math.sqrt(ratingNormSq), scala.math.sqrt(rating2NormSq))
+val jaccard = jaccardSimilarity(size, numRaters, numRaters2)
+
+(key, (corr, regCorr, cosSim, jaccard))   }) ```
+</code></pre>
+
+<p>The nice thing here is that, once the raw input metrics themselves are computed, we can use the exact same functions from the Scalding example to compute the similarity metrics as can be seen above - I simply copy-and-pasted Ed’s <code>correlation</code>, <code>regularizedCorrelation</code>, <code>cosineSimilarity</code> and <code>jaccardSimilarity</code> functions!</p>
+
+<h3 id="some-results">Some results</h3>
+
+<p>So, what do the results look like after putting all of this together? Since I used a different input data source we won’t get the same results, but we’d hope that most of them would make sense. Similarly to Ed’s results, I found that using raw <code>correlation</code> resulted in sub-optimal similarities (at least from eye-balling and “sense checking”), since some movie pairs have very few common raters (many had just 1 rater in common).</p>
+
+<p>I also found that <code>cosine similarity</code> didn’t do so well on a “sense check” basis either, which was somewhat surprising since this is usually the standard similarity metric for collaborative filtering. This seems to be due to a lot of movies having cosine similarity of 1.0, so perhaps I have messed up the calculation somewhere (if you spot an error please let me know).</p>
+
+<p>In any case, here are the top 10 movies most similar to Die Hard (1998), ranked by <code>regularized correlation</code>:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: center">Movie 1</th>
+      <th style="text-align: center">Movie 2</th>
+      <th style="text-align: center">Correlation</th>
+      <th style="text-align: center">Reg Correlation</th>
+      <th style="text-align: center">Cosine Similarity</th>
+      <th style="text-align: center">Jaccard Similarity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Die Hard: With a Vengeance (1995)</td>
+      <td style="text-align: center">0.5413</td>
+      <td style="text-align: center">0.4946</td>
+      <td style="text-align: center">0.9692</td>
+      <td style="text-align: center">0.4015</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Die Hard 2 (1990)</td>
+      <td style="text-align: center">0.4868</td>
+      <td style="text-align: center">0.4469</td>
+      <td style="text-align: center">0.9687</td>
+      <td style="text-align: center">0.4088</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Bananas (1971)</td>
+      <td style="text-align: center">0.5516</td>
+      <td style="text-align: center">0.4390</td>
+      <td style="text-align: center">0.9745</td>
+      <td style="text-align: center">0.1618</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Good, The Bad and The Ugly, The (1966)</td>
+      <td style="text-align: center">0.4608</td>
+      <td style="text-align: center">0.4032</td>
+      <td style="text-align: center">0.9743</td>
+      <td style="text-align: center">0.2518</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Hunt for Red October, The (1990)</td>
+      <td style="text-align: center">0.4260</td>
+      <td style="text-align: center">0.3944</td>
+      <td style="text-align: center">0.9721</td>
+      <td style="text-align: center">0.4098</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">City Slickers II: The Legend of Curly’s Gold (1994)</td>
+      <td style="text-align: center">0.5349</td>
+      <td style="text-align: center">0.3903</td>
+      <td style="text-align: center">0.9506</td>
+      <td style="text-align: center">0.1116</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Grease 2 (1982)</td>
+      <td style="text-align: center">0.6502</td>
+      <td style="text-align: center">0.3901</td>
+      <td style="text-align: center">0.9449</td>
+      <td style="text-align: center">0.0647</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Star Trek: The Wrath of Khan (1982)</td>
+      <td style="text-align: center">0.4160</td>
+      <td style="text-align: center">0.3881</td>
+      <td style="text-align: center">0.9675</td>
+      <td style="text-align: center">0.4441</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Sphere (1998)</td>
+      <td style="text-align: center">0.7722</td>
+      <td style="text-align: center">0.3861</td>
+      <td style="text-align: center">0.9893</td>
+      <td style="text-align: center">0.0403</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Die Hard (1988)</td>
+      <td style="text-align: center">Field of Dreams (1989)</td>
+      <td style="text-align: center">0.4126</td>
+      <td style="text-align: center">0.3774</td>
+      <td style="text-align: center">0.9630</td>
+      <td style="text-align: center">0.3375</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><br />
+Looks fairly reasonable! And here are the 10 most similar to Il Postino:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: center">Movie 1</th>
+      <th style="text-align: center">Movie 2</th>
+      <th style="text-align: center">Correlation</th>
+      <th style="text-align: center">Reg Correlation</th>
+      <th style="text-align: center">Cosine Similarity</th>
+      <th style="text-align: center">Jaccard Similarity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Bottle Rocket (1996)</td>
+      <td style="text-align: center">0.8789</td>
+      <td style="text-align: center">0.4967</td>
+      <td style="text-align: center">0.9855</td>
+      <td style="text-align: center">0.0699</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Looking for Richard (1996)</td>
+      <td style="text-align: center">0.7112</td>
+      <td style="text-align: center">0.4818</td>
+      <td style="text-align: center">0.9820</td>
+      <td style="text-align: center">0.1123</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Ridicule (1996)</td>
+      <td style="text-align: center">0.6550</td>
+      <td style="text-align: center">0.4780</td>
+      <td style="text-align: center">0.9759</td>
+      <td style="text-align: center">0.1561</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">When We Were Kings (1996)</td>
+      <td style="text-align: center">0.7581</td>
+      <td style="text-align: center">0.4773</td>
+      <td style="text-align: center">0.9888</td>
+      <td style="text-align: center">0.0929</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Mother Night (1996)</td>
+      <td style="text-align: center">0.8802</td>
+      <td style="text-align: center">0.4611</td>
+      <td style="text-align: center">0.9848</td>
+      <td style="text-align: center">0.0643</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Kiss Me, Guido (1997)</td>
+      <td style="text-align: center">0.9759</td>
+      <td style="text-align: center">0.4337</td>
+      <td style="text-align: center">0.9974</td>
+      <td style="text-align: center">0.0452</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Blue in the Face (1995)</td>
+      <td style="text-align: center">0.6372</td>
+      <td style="text-align: center">0.4317</td>
+      <td style="text-align: center">0.9585</td>
+      <td style="text-align: center">0.1148</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Othello (1995)</td>
+      <td style="text-align: center">0.5875</td>
+      <td style="text-align: center">0.4287</td>
+      <td style="text-align: center">0.9774</td>
+      <td style="text-align: center">0.1330</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">English Patient, The (1996)</td>
+      <td style="text-align: center">0.4586</td>
+      <td style="text-align: center">0.4210</td>
+      <td style="text-align: center">0.9603</td>
+      <td style="text-align: center">0.2494</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Postino, Il (1994)</td>
+      <td style="text-align: center">Mediterraneo (1991)</td>
+      <td style="text-align: center">0.6200</td>
+      <td style="text-align: center">0.4200</td>
+      <td style="text-align: center">0.9879</td>
+      <td style="text-align: center">0.1235</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><br />
+How about Star Wars?</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: center">Movie 1</th>
+      <th style="text-align: center">Movie 2</th>
+      <th style="text-align: center">Correlation</th>
+      <th style="text-align: center">Reg Correlation</th>
+      <th style="text-align: center">Cosine Similarity</th>
+      <th style="text-align: center">Jaccard Similarity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Empire Strikes Back, The (1980)</td>
+      <td style="text-align: center">0.7419</td>
+      <td style="text-align: center">0.7168</td>
+      <td style="text-align: center">0.9888</td>
+      <td style="text-align: center">0.5306</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Return of the Jedi (1983)</td>
+      <td style="text-align: center">0.6714</td>
+      <td style="text-align: center">0.6539</td>
+      <td style="text-align: center">0.9851</td>
+      <td style="text-align: center">0.6708</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Raiders of the Lost Ark (1981)</td>
+      <td style="text-align: center">0.5074</td>
+      <td style="text-align: center">0.4917</td>
+      <td style="text-align: center">0.9816</td>
+      <td style="text-align: center">0.5607</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Meet John Doe (1941)</td>
+      <td style="text-align: center">0.6396</td>
+      <td style="text-align: center">0.4397</td>
+      <td style="text-align: center">0.9840</td>
+      <td style="text-align: center">0.0442</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Love in the Afternoon (1957)</td>
+      <td style="text-align: center">0.9234</td>
+      <td style="text-align: center">0.4374</td>
+      <td style="text-align: center">0.9912</td>
+      <td style="text-align: center">0.0181</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Man of the Year (1995)</td>
+      <td style="text-align: center">1.0000</td>
+      <td style="text-align: center">0.4118</td>
+      <td style="text-align: center">0.9995</td>
+      <td style="text-align: center">0.0141</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">When We Were Kings (1996)</td>
+      <td style="text-align: center">0.5278</td>
+      <td style="text-align: center">0.4021</td>
+      <td style="text-align: center">0.9737</td>
+      <td style="text-align: center">0.0637</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Cry, the Beloved Country (1995)</td>
+      <td style="text-align: center">0.7001</td>
+      <td style="text-align: center">0.3957</td>
+      <td style="text-align: center">0.9763</td>
+      <td style="text-align: center">0.0257</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">To Be or Not to Be (1942)</td>
+      <td style="text-align: center">0.6999</td>
+      <td style="text-align: center">0.3956</td>
+      <td style="text-align: center">0.9847</td>
+      <td style="text-align: center">0.0261</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Haunted World of Edward D. Wood Jr., The (1995)</td>
+      <td style="text-align: center">0.6891</td>
+      <td style="text-align: center">0.3895</td>
+      <td style="text-align: center">0.9758</td>
+      <td style="text-align: center">0.0262</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><br />
+Finally, what about the 10 most <em>dissimilar</em> to Star Wars?</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: center">Movie 1</th>
+      <th style="text-align: center">Movie 2</th>
+      <th style="text-align: center">Correlation</th>
+      <th style="text-align: center">Reg Correlation</th>
+      <th style="text-align: center">Cosine Similarity</th>
+      <th style="text-align: center">Jaccard Similarity</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Fathers’ Day (1997)</td>
+      <td style="text-align: center">-0.6625</td>
+      <td style="text-align: center">-0.4417</td>
+      <td style="text-align: center">0.9074</td>
+      <td style="text-align: center">0.0397</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Jason’s Lyric (1994)</td>
+      <td style="text-align: center">-0.9661</td>
+      <td style="text-align: center">-0.3978</td>
+      <td style="text-align: center">0.8110</td>
+      <td style="text-align: center">0.0141</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Lightning Jack (1994)</td>
+      <td style="text-align: center">-0.7906</td>
+      <td style="text-align: center">-0.3953</td>
+      <td style="text-align: center">0.9361</td>
+      <td style="text-align: center">0.0202</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Marked for Death (1990)</td>
+      <td style="text-align: center">-0.5922</td>
+      <td style="text-align: center">-0.3807</td>
+      <td style="text-align: center">0.8729</td>
+      <td style="text-align: center">0.0361</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Mixed Nuts (1994)</td>
+      <td style="text-align: center">-0.6219</td>
+      <td style="text-align: center">-0.3731</td>
+      <td style="text-align: center">0.8806</td>
+      <td style="text-align: center">0.0303</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Poison Ivy II (1995)</td>
+      <td style="text-align: center">-0.7443</td>
+      <td style="text-align: center">-0.3722</td>
+      <td style="text-align: center">0.7169</td>
+      <td style="text-align: center">0.0201</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">In the Realm of the Senses (Ai no corrida) (1976)</td>
+      <td style="text-align: center">-0.8090</td>
+      <td style="text-align: center">-0.3596</td>
+      <td style="text-align: center">0.8108</td>
+      <td style="text-align: center">0.0162</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">What Happened Was… (1994)</td>
+      <td style="text-align: center">-0.9045</td>
+      <td style="text-align: center">-0.3392</td>
+      <td style="text-align: center">0.8781</td>
+      <td style="text-align: center">0.0121</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Female Perversions (1996)</td>
+      <td style="text-align: center">-0.8039</td>
+      <td style="text-align: center">-0.3310</td>
+      <td style="text-align: center">0.8670</td>
+      <td style="text-align: center">0.0141</td>
+    </tr>
+    <tr>
+      <td style="text-align: center">Star Wars (1977)</td>
+      <td style="text-align: center">Celtic Pride (1996)</td>
+      <td style="text-align: center">-0.6062</td>
+      <td style="text-align: center">-0.3175</td>
+      <td style="text-align: center">0.8998</td>
+      <td style="text-align: center">0.0220</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><br />
+I’ll leave it to you to decide on the accuracy.</p>
+
+<h2 id="conclusion-and-next-steps">Conclusion and Next Steps</h2>
+
+<p>Hopefully this gives a taste for Spark and how it can be used in a very similar manner to Scalding and MapReduce - with all the advantages of HDFS compatability, in-memory caching capabilities, low-latency execution and other distributed-memory primitives (such as broadcast variables and accumulators); not to mention interactive analysis via the Scala/Spark console, and a Java and Python API! Check out the documentation, tutorials and examples <a href="http://spark-project.org/docs/latest/">here</a>.</p>
+
+<p>One issue that is apparent from the above code snippets is that Scalding’s API is somewhat cleaner when doing complex field manipulations and joins, due to the ability to have named fields as Scala <code>Symbols</code>, e.g.
+<code>tweets.map('tweet -&gt; 'length) { tweet : String =&gt; tweet.size }</code></p>
+
+<p>The lack of named fields in Spark’s API does lead to some messy tuple-unpacking and makes keeping track of which fields are which more complex. This could be an interesting potential addition to Spark.</p>
+
+<p>Finally, please do let me know if you find any issues or errors. And thanks to the Spark team for a fantastic project!</p>
+]]></content>
+  </entry>
+  
+</feed>
