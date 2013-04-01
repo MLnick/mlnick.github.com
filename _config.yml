@@ -3,9 +3,9 @@
 # ----------------------- #
 
 url: http://MLnick.github.com
-title: My Octopress Blog
-subtitle: A blogging framework for hackers.
-author: Your Name
+title: Crouching Data, Hidden Markov
+subtitle: Adventures in High Dimensions
+author: Nick Pentreath
 simple_search: http://google.com/search
 description:
 
@@ -33,7 +33,7 @@ destination: public
 plugins: plugins
 code_dir: downloads/code
 category_dir: blog/categories
-markdown: rdiscount
+markdown: kramdown
 pygments: false # default python pygments have been replaced by pygments.rb
 
 paginate: 10          # Posts per page on the blog index
@@ -58,13 +58,13 @@ default_asides: [asides/recent_posts.html, asides/github.html, asides/twitter.ht
 # ----------------------- #
 
 # Github repositories
-github_user:
+github_user: MLnick
 github_repo_count: 0
 github_show_profile_link: true
 github_skip_forks: true
 
 # Twitter
-twitter_user:
+twitter_user: MLnick
 twitter_tweet_count: 4
 twitter_show_replies: false
 twitter_follow_button: true
