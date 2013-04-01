@@ -6,7 +6,7 @@ comments: true
 categories: [Spark, collaborative filtering, Scala, recommendations]
 ---
 
-_This post is inspired by [Edwin Chen's post on Scalding](http://blog.echen.me/2012/02/09/movie-recommendations-and-more-via-mapreduce-and-scalding/). I encourage you to first read that post! The Spark code is adapted from his Scalding code and is available in full [here](https://gist.github.com/MLnick/5286475s)._
+_This post is inspired by [Edwin Chen's post on Scalding](http://blog.echen.me/2012/02/09/movie-recommendations-and-more-via-mapreduce-and-scalding/). I encourage you to first read that post! The Spark code is adapted from his Scalding code and is available in full [here](https://gist.github.com/MLnick/5286475)._
 
 As outlined in Ed's post, Scalding is a Scala DSL for Hadoop MapReduce that makes it easier, more natural and more concise to write MapReduce workflows. The Scala code ultimately compiles down to MapReduce jobs via [Cascading](http://www.cascading.org/).
 
